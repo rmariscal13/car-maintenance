@@ -7,9 +7,11 @@ const SRC_TEXT = {
   fabricante:"Plazo del manual del fabricante",
   gemelo:"Plazo del plan de un modelo gemelo (mismo coche con otra marca)",
   normativa:"Lo marca la ley",
-  aproximado:"Recomendación general: no se pudo confirmar con el fabricante"
+  aproximado:"Recomendación general: no se pudo confirmar con el fabricante",
+  usuario:"Tarea que has creado tú, con el plazo que tú has elegido"
 };
-const srcOf = it => ({ label: it.srcLabel || it.srcType, cls: it.srcType==="aproximado" ? "src-aprox" : "src-ok", text: SRC_TEXT[it.srcType] || "" });
+const srcOf = it => it.custom ? { label:"Tarea tuya", cls:"src-own", text:SRC_TEXT.usuario }
+  : { label: it.srcLabel || it.srcType, cls: it.srcType==="aproximado" ? "src-aprox" : "src-ok", text: SRC_TEXT[it.srcType] || "" };
 const modelName = m => [m.make, m.model, m.version].filter(Boolean).join(" ");
 // Selector en tres pasos, como en las tiendas de recambios: marca → modelo (generación y años) → motorización
 const FUEL_TEXT = { gasolina:"Gasolina", diesel:"Diésel", hibrido:"Híbrido", hibrido_enchufable:"Híbrido enchufable", electrico:"Eléctrico", glp:"GLP", gnc:"Gas natural" };
@@ -21,7 +23,7 @@ const engineName = m => [m.version, m.power_kw && !/CV/.test(m.version||"") ? Ma
 // Piezas de una tarea; las que dependen del equipamiento (con o sin aire) se filtran según el coche
 const partsFor = (it, c) => (it.parts||[]).filter(p => !p.condition || (p.condition==="sin_aire") === (c?.ac===false));
 
-const state = { cars:[], logs:[], carId:null, tab:"proximos", editingLog:null, models:{}, modelList:[], user:null, requests:[], isAdmin:false };
+const state = { cars:[], logs:[], carTasks:[], editingTask:null, carId:null, tab:"proximos", editingLog:null, models:{}, modelList:[], user:null, requests:[], isAdmin:false };
 
 /* ===== Catálogo ===== */
 async function loadModelList(){
@@ -58,11 +60,14 @@ async function ensureModel(id){
 const fromCar = r => ({ id:r.id, modelId:r.model_id, name:r.name||"", plate:r.plate||"", firstReg:r.first_reg, kmNow:r.km_now, kmDate:r.km_date, ac:r.has_ac, van:r.is_van===true });
 const fromLog = r => ({ id:r.id, carId:r.car_id, date:r.done_on, km:r.km, items:r.task_codes||[], other:r.other||"",
   cost:r.cost==null?null:Number(r.cost), where:r.place||"", notes:r.notes||"" });
+const fromCarTask = r => ({ id:r.id, carId:r.car_id, code:r.code, custom:r.custom, name:r.name||"", action:r.action||"", hidden:r.hidden,
+  km:r.interval_km, months:r.interval_months, notes:r.notes||"", createdAt:r.created_at });
 const must = ({ data, error }) => { if (error) throw error; return data; };
 const store = {
   async reload(){
-    const [cars, logs] = await Promise.all([ sb.from("cars").select("*").order("created_at"), sb.from("service_logs").select("*") ]);
-    state.cars = must(cars).map(fromCar); state.logs = must(logs).map(fromLog);
+    const [cars, logs, tasks] = await Promise.all([ sb.from("cars").select("*").order("created_at"), sb.from("service_logs").select("*"),
+      sb.from("car_tasks").select("*").order("created_at") ]);
+    state.cars = must(cars).map(fromCar); state.logs = must(logs).map(fromLog); state.carTasks = must(tasks).map(fromCarTask);
     await Promise.all(state.cars.map(c => ensureModel(c.modelId)));
     render();
   },
@@ -77,6 +82,16 @@ const store = {
     if (l.id) must(await sb.from("service_logs").update(row).eq("id", l.id));
     else must(await sb.from("service_logs").insert(row));
   },
+  // Ajuste de una tarea del coche. Una tarea del catálogo sin nada cambiado no necesita fila: se borra
+  async saveCarTask(row){
+    const prev = state.carTasks.find(t => t.carId===row.car_id && t.code===row.code);
+    if (!row.custom && !row.hidden && row.interval_km==null && row.interval_months==null) {
+      if (prev) must(await sb.from("car_tasks").delete().eq("id", prev.id));
+      return;
+    }
+    must(await sb.from("car_tasks").upsert({ ...row, updated_at:new Date().toISOString() }, { onConflict:"car_id,code" }));
+  },
+  async deleteCarTask(id){ must(await sb.from("car_tasks").delete().eq("id", id)); },
   async deleteLog(id){ must(await sb.from("service_logs").delete().eq("id", id)); },
   async loadRequests(){
     const [reqs, admin] = await Promise.all([ sb.from("model_requests").select("*").order("created_at", { ascending:false }), sb.rpc("is_admin") ]);
@@ -104,6 +119,22 @@ function toast(msg){ const t=$("#toast"); t.textContent=msg; t.hidden=false; cle
 /* ===== Cálculo del plan ===== */
 const car = () => state.cars.find(c=>c.id===state.carId);
 const model = c => state.models[c?.modelId] || EMPTY_MODEL;
+// Plan del coche: el del catálogo con los ajustes del usuario (ocultas, plazos cambiados) más sus tareas propias.
+// `factory` guarda el plazo original para enseñar siempre de dónde sale cada plazo.
+function planItems(c){
+  const adj = state.carTasks.filter(t => t.carId===c?.id);
+  const byCode = new Map(adj.map(t => [t.code, t]));
+  const pick = (v, orig) => v==null ? orig : (v || null);   // null: el original; 0: sin plazo por esa vía
+  const base = model(c).items.map(it => {
+    const factory = { km:it.km??null, months:it.months??null }, a = byCode.get(it.id);
+    if (!a) return { ...it, factory };
+    const kmV = it.special ? factory.km : pick(a.km, factory.km), monthsV = it.special ? factory.months : pick(a.months, factory.months);
+    return { ...it, km:kmV, months:monthsV, factory, hidden:a.hidden, changed: kmV!==factory.km || monthsV!==factory.months };
+  });
+  const own = adj.filter(t => t.custom).map(t => ({ id:t.code, name:t.name, action:t.action||"Hacer", km:t.km||null, months:t.months||null,
+    why:t.notes, custom:true, hidden:t.hidden, createdAt:t.createdAt, parts:[] }));
+  return [...base, ...own];
+}
 function kmRate(c, logs){
   // km/día con la lectura más reciente frente a la matriculación (o la lectura más antigua)
   const pts=[...logs.map(l=>({d:parse(l.date),k:l.km}))];
@@ -133,11 +164,11 @@ function itvNext(c, logs){
   return { due, last:null, estimated:true };
 }
 function schedule(c){
-  const m=model(c); const logs=state.logs.filter(l=>l.carId===c.id);
+  const logs=state.logs.filter(l=>l.carId===c.id);
   const rate=kmRate(c,logs); const rd=latestReading(c,logs);
   const today=parse(todayISO());
   const kmToday = rd.k + rate*Math.max(0,(today-rd.d)/DAY);
-  const rows = m.items.filter(it=>!it.info).map(it=>{
+  const rows = planItems(c).filter(it=>!it.info && !it.hidden).map(it=>{
     const r={it};
     if(it.special==="itv"){
       const x=itvNext(c,logs);
@@ -152,9 +183,11 @@ function schedule(c){
     const last=logs.filter(l=>l.items.includes(it.id)).sort((a,b)=>b.date.localeCompare(a.date)||b.km-a.km)[0];
     let base=null;
     if(last) base={d:parse(last.date),k:last.km,from:"log"};
+    // Tarea propia sin anotar: se cuenta desde que se creó, con los km estimados de ese día
+    else if(it.custom && it.createdAt){ const d=parse(it.createdAt.slice(0,10)); base={d,k:Math.max(0,kmToday-rate*Math.max(0,(today-d)/DAY)),from:"created"}; }
     else if(c.firstReg) base={d:parse(c.firstReg),k:0,from:"reg"};
-    if(!base){ r.status="none"; r.sort=1e9; return r; }
-    r.last=last; r.fromReg = base.from==="reg";
+    if(!base || (!it.km && !it.months)){ r.status="none"; r.sort=1e9; return r; }
+    r.last=last; r.fromReg = base.from==="reg"; r.fromCreated = base.from==="created";
     let pk=0, pd=0, daysByKm=Infinity, daysByTime=Infinity;
     if(it.km){ r.dueKm=base.k+it.km; r.kmLeft=r.dueKm-kmToday; pk=(kmToday-base.k)/it.km; daysByKm=r.kmLeft/rate; }
     if(it.months){ r.dueDate=addMonths(base.d,it.months); daysByTime=(r.dueDate-today)/DAY; pd=(today-base.d)/(r.dueDate-base.d); }
@@ -229,23 +262,30 @@ function render(){
   const cnt=k=>s.rows.filter(r=>r.status===k).length;
   $("#summary").innerHTML=[cnt("bad")?`<span class="pill bad">${cnt("bad")} vencido${cnt("bad")>1?"s":""}</span>`:"",cnt("pending")?`<span class="pill bad">${cnt("pending")} sin registrar</span>`:"",cnt("warn")?`<span class="pill warn">${cnt("warn")} pronto</span>`:"",`<span class="pill ok">${cnt("ok")} al día</span>`].join("");
   // próximos
+  const plan=planItems(c), hiddenItems=plan.filter(it=>it.hidden && !it.info);
   $("#p-proximos").innerHTML = s.rows.map(r=>`<article class="card ${r.status}">
-    <div class="head"><div><h3>${esc(r.it.name)}</h3><div class="small muted">${esc(r.it.action)} · ${esc(intervalText(r.it))}</div><div style="margin-top:4px"><span class="src ${srcOf(r.it).cls}" title="${esc(srcOf(r.it).text)}">${esc(srcOf(r.it).label)}</span></div></div>${statusPill(r)}</div>
+    <div class="head"><div><h3>${esc(r.it.name)}</h3><div class="small muted">${esc(r.it.action)} · ${esc(intervalText(r.it)||"sin plazo")}</div>${srcBadges(r.it)}</div>${statusPill(r)}</div>
     ${r.status!=="none"?`<div class="due">${dueText(r)}</div><div class="bar" aria-hidden="true"><i style="width:${Math.round((r.pct||0)*100)}%"></i></div>`:""}
-    ${r.status==="pending"?`<div class="note">No hay registro de esta tarea y ya ha pasado su plazo desde la matriculación. Hazla, o apúntala en el Historial si sabes cuándo se hizo.</div>`:r.unknown?`<div class="note">No hay registro de esta tarea; se cuenta desde la matriculación.</div>`:""}
-    <div class="note">${esc(r.it.why||"")}</div>
-    <div class="row"><button type="button" class="ghost" onclick="quickLog('${r.it.id}')">+ Anotar como hecho</button></div>
+    ${r.status==="pending"?`<div class="note">No hay registro de esta tarea y ya ha pasado su plazo desde la matriculación. Hazla, o apúntala en el Historial si sabes cuándo se hizo.</div>`:r.unknown?`<div class="note">No hay registro de esta tarea; se cuenta desde la matriculación.</div>`:r.fromCreated?`<div class="note">Todavía no la has anotado; se cuenta desde el día que la creaste. Si la hiciste antes, apúntala en el Historial.</div>`:""}
+    ${r.it.why?`<div class="note">${esc(r.it.why)}</div>`:""}
+    ${state.editingTask===r.it.id ? taskEditor(r.it) : `<div class="row"><button type="button" class="ghost" data-act="log" data-code="${esc(r.it.id)}">+ Anotar como hecho</button><button type="button" class="ghost" data-act="edit" data-code="${esc(r.it.id)}">Ajustar</button></div>`}
     ${partsFor(r.it,c).length?`<details class="parts"><summary>Recambios para este coche</summary>${partsFor(r.it,c).map(p=>partLinks(p,c)).join("")}</details>`:""}
-  </article>`).join("");
+  </article>`).join("")
+    + (s.rows.length?"":`<div class="box empty">Has ocultado todas las tareas de este coche. Vuelve a mostrar las que quieras abajo.</div>`)
+    + (state.editingTask==="__new" ? `<article class="card"><h3>Nuevo mantenimiento propio</h3>${taskEditor(null)}</article>`
+      : `<div class="row"><button type="button" data-act="new">+ Añadir un mantenimiento propio</button></div>`)
+    + (hiddenItems.length?`<details class="box"><summary><strong>Tareas ocultas (${hiddenItems.length})</strong> <span class="small muted">No salen en la lista ni en los avisos</span></summary>
+      ${hiddenItems.map(it=>`<div class="row" style="justify-content:space-between"><span>${esc(it.name)} <span class="small muted">${esc(intervalText(it)||"")}</span></span><button type="button" class="ghost" data-act="show" data-code="${esc(it.id)}">Volver a mostrar</button></div>`).join("")}</details>`:"");
   // historial
-  const items=model(c).items;
-  if(!$("#logItems").dataset.model || $("#logItems").dataset.model!==c.modelId){
-    $("#logItems").innerHTML=items.filter(it=>!it.info).map(it=>`<label for="li-${it.id}"><input type="checkbox" id="li-${it.id}" value="${it.id}"> ${esc(it.name)}</label>`).join("")
+  // Las ocultas también se pueden anotar (y así no se pierden al editar un registro antiguo)
+  const items=plan, logKey=c.id+"|"+items.map(it=>it.id+(it.hidden?"*":"")+it.name).join("|");
+  if($("#logItems").dataset.key!==logKey){
+    $("#logItems").innerHTML=items.filter(it=>!it.info).map(it=>`<label for="li-${esc(it.id)}"><input type="checkbox" id="li-${esc(it.id)}" value="${esc(it.id)}"> ${esc(it.name)}${it.hidden?' <span class="small muted">(oculta)</span>':""}</label>`).join("")
       +`<label for="li-otro"><input type="checkbox" id="li-otro" value="otro"> Otro trabajo</label>`;
-    $("#logItems").dataset.model=c.modelId;
+    $("#logItems").dataset.key=logKey;
   }
   const logs=[...s.logs].sort((a,b)=>b.date.localeCompare(a.date)||b.km-a.km);
-  const name=(id,l)=>id==="otro"?(l.other||"Otro trabajo"):(items.find(i=>i.id===id)?.name||id);
+  const name=(id,l)=>id==="otro"?(l.other||"Otro trabajo"):(items.find(i=>i.id===id)?.name||(id.startsWith("u_")?"Tarea propia borrada":id));
   $("#logList").innerHTML = logs.length? logs.map(l=>`<article class="card log">
       <div class="when"><h3>${esc(df.format(parse(l.date)))}</h3><span class="mono">${km(l.km)}</span>${l.cost!=null&&l.cost!==""?`<span class="mono">${esc(nf.format(l.cost))} €</span>`:""}${l.where?`<span class="muted">${esc(l.where)}</span>`:""}</div>
       <div class="tags">${l.items.map(i=>`<span class="tag">${esc(name(i,l))}</span>`).join("")}</div>
@@ -254,9 +294,32 @@ function render(){
         <span id="del-${l.id}"><button class="ghost" type="button" onclick="askDel('${l.id}')">Borrar</button></span></div>
     </article>`).join("") : `<div class="box empty">Todavía no hay mantenimientos anotados. Usa el formulario de arriba para añadir el primero, por ejemplo el último cambio de aceite.</div>`;
 }
+// Etiqueta de origen del plazo y, si el usuario lo ha cambiado, cuál era el original
+function srcBadges(it){
+  const src=srcOf(it);
+  return `<div class="row" style="margin-top:4px;gap:4px 6px"><span class="src ${src.cls}" title="${esc(src.text)}">${esc(src.label)}</span>${it.changed?`<span class="src src-own" title="Has cambiado el plazo de esta tarea para tu coche">Plazo cambiado por ti</span><span class="small muted">Original: ${esc(intervalText(it.factory)||"sin plazo")}</span>`:""}</div>`;
+}
+const monthsText = n => n%12===0 ? (n/12===1?"1 año":n/12+" años") : n===1 ? "1 mes" : n+" meses";
+function taskEditor(it){
+  const isNew=!it, own=isNew||it.custom, itv=it?.special==="itv", code=esc(it?.id||"");
+  return `<form class="edit" data-code="${code}" style="display:flex;flex-direction:column;gap:10px;border-top:1px dashed var(--line);padding-top:10px">
+    ${own?`<div class="grid2"><label class="f">Nombre<input name="name" maxlength="80" required value="${esc(it?.name||"")}" placeholder="Por ejemplo: Limpiar el filtro del aire"></label>
+      <label class="f">Qué hacer <span class="h">Opcional</span><input name="action" maxlength="40" value="${esc(it?.custom?it.action:"")}" placeholder="Cambiar, Revisar, Limpiar…"></label></div>`:""}
+    ${itv?`<div class="note">El plazo de la ITV lo marca la ley según la antigüedad del coche, así que no se puede cambiar. Sí puedes ocultarla.</div>`:`
+    <div class="grid2"><label class="f">Cada (km) <span class="h">Vacío: no se cuenta por kilómetros</span><input name="km" type="number" inputmode="numeric" min="1" max="1000000" step="1" value="${it?.km??""}"></label>
+      <label class="f">O cada (meses) <span class="h">Vacío: no se cuenta por tiempo</span><input name="months" type="number" inputmode="numeric" min="1" max="600" step="1" value="${it?.months??""}"></label></div>
+    ${own?"":`<div class="small muted">Plazo original (${esc(srcOf(it).label)}): ${esc(intervalText(it.factory)||"sin plazo")}. El cambio solo afecta a este coche.</div>`}`}
+    ${own?`<label class="f">Notas <span class="h">Opcional</span><textarea name="notes" rows="2" maxlength="500">${esc(it?.why||"")}</textarea></label>`:""}
+    <div class="row">${itv?"":`<button class="primary" type="submit">${isNew?"Añadir":"Guardar"}</button>`}
+      <button type="button" data-act="cancel">Cancelar</button>
+      ${!isNew&&!own&&it.changed?`<button type="button" class="ghost" data-act="reset" data-code="${code}">Volver al plazo original</button>`:""}
+      ${!isNew?`<button type="button" class="ghost" data-act="hide" data-code="${code}">Ocultar</button>`:""}
+      ${!isNew&&own?`<button type="button" class="ghost" data-act="del" data-code="${code}">Borrar tarea</button>`:""}
+      <span class="small msg" role="status"></span></div></form>`;
+}
 function intervalText(it){
   if(it.special==="itv") return "según la antigüedad";
-  const a=[]; if(it.km) a.push("cada "+km(it.km)); if(it.months) a.push((it.km?"o ":"cada ")+(it.months%12===0? (it.months/12===1?"1 año":it.months/12+" años") : it.months+" meses"));
+  const a=[]; if(it.km) a.push("cada "+km(it.km)); if(it.months) a.push((it.km?"o ":"cada ")+monthsText(it.months));
   return a.join(" ");
 }
 function renderSpare(c){
@@ -273,11 +336,14 @@ function renderPlan(c){
   const m=c?model(c):EMPTY_MODEL;
   $("#p-plan").innerHTML=`<div class="box"><h2>${esc(m.name)}</h2><div class="muted small">${esc(m.detail)}</div>
     <div class="tablewrap" style="margin-top:8px"><table><thead><tr><th>Tarea</th><th>Kilómetros</th><th>Tiempo</th><th>Qué hacer</th><th>De dónde sale</th></tr></thead><tbody>
-    ${m.items.map(it=>`<tr><td><strong>${esc(it.name)}</strong><div class="small muted">${esc(it.why||"")}</div></td><td class="n">${it.km?km(it.km):"—"}</td><td class="n">${it.special==="itv"?(c?.van?"2 años, cada 2 hasta 6, anual hasta 10, luego cada 6 meses":"4 años, luego 2; anual desde 10"):it.months?it.months+" meses":"—"}</td><td>${esc(it.action)}</td><td><span class="src ${srcOf(it).cls}">${esc(srcOf(it).label)}</span></td></tr>`).join("")}
+    ${(c?planItems(c).filter(it=>!it.custom):m.items).map(it=>`<tr><td><strong>${esc(it.name)}</strong><div class="small muted">${esc(it.why||"")}</div>${it.hidden?`<div class="small"><span class="src src-own">Oculta en tu coche</span></div>`:it.changed?`<div class="small"><span class="src src-own">Plazo cambiado por ti</span> ${esc(intervalText(it))}</div>`:""}</td><td class="n">${(it.factory||it).km?km((it.factory||it).km):"—"}</td><td class="n">${it.special==="itv"?(c?.van?"2 años, cada 2 hasta 6, anual hasta 10, luego cada 6 meses":"4 años, luego 2; anual desde 10"):(it.factory||it).months?(it.factory||it).months+" meses":"—"}</td><td>${esc(it.action)}</td><td><span class="src ${srcOf(it).cls}">${esc(srcOf(it).label)}</span></td></tr>`).join("")}
     </tbody></table></div>
     <div class="legend small" style="margin-top:8px">${[...new Map(m.items.map(it=>[srcOf(it).label,srcOf(it)])).values()].map(x=>`<span><span class="src ${x.cls}">${esc(x.label)}</span> <span class="muted">${esc(x.text)}</span></span>`).join("")}</div>
+    <p class="small muted">Esta tabla enseña siempre el plazo original. Si has cambiado u ocultado alguna tarea, lo verás debajo de su nombre; se ajusta desde <button type="button" class="ghost" style="padding:0" onclick="go('proximos')">Próximos</button>, con el botón «Ajustar» de cada tarea.</p>
     <p class="small muted">Lo que antes llegue: kilómetros o tiempo. Si usas el coche en ciudad con trayectos cortos, mucho calor o polvo, adelanta aceite y filtros.</p></div>
     <div class="box"><h3>Datos técnicos</h3><div class="tablewrap"><table style="min-width:0"><tbody>${m.specs.map(([k,v])=>`<tr><th style="width:38%">${esc(k)}</th><td>${esc(v)}</td></tr>`).join("")}</tbody></table></div></div>
+    ${c&&planItems(c).some(it=>it.custom)?`<div class="box"><h3>Tus tareas</h3><p class="small muted" style="margin:0">Las has creado tú; no vienen del fabricante.</p>
+      <div class="tablewrap"><table style="min-width:0"><thead><tr><th>Tarea</th><th>Plazo</th></tr></thead><tbody>${planItems(c).filter(it=>it.custom).map(it=>`<tr><td><strong>${esc(it.name)}</strong>${it.hidden?' <span class="src src-own">Oculta</span>':""}<div class="small muted">${esc(it.why||"")}</div></td><td>${esc(intervalText(it)||"sin plazo")}</td></tr>`).join("")}</tbody></table></div></div>`:""}
     <div class="box small"><h3>Fuentes</h3><ul class="sources">${m.sources.map(([t,u])=>`<li><a href="${esc(u)}" target="_blank" rel="noopener">${esc(t)}</a></li>`).join("")}</ul>
     <p class="muted">Si tienes el libro de mantenimiento de tu coche, manda lo que diga ese libro.</p></div>`;
 }
@@ -343,7 +409,60 @@ function go(t){ state.tab=t; try{localStorage.setItem("mant-tab",t)}catch{} rend
 window.go=go;
 document.querySelectorAll("nav.tabs button").forEach(b=>b.addEventListener("click",()=>go(b.dataset.tab)));
 $("#spareSearch").addEventListener("input",()=>renderSpare(car()));
-$("#carSelect").addEventListener("change",e=>{ state.carId=e.target.value; try{localStorage.setItem("mant-car",state.carId)}catch{} render(); });
+$("#carSelect").addEventListener("change",e=>{ state.carId=e.target.value; state.editingTask=null; try{localStorage.setItem("mant-car",state.carId)}catch{} render(); });
+
+/* Ajustes del plan: ocultar, cambiar el plazo, tareas propias */
+const findItem = code => planItems(car()).find(it => it.id===code);
+const adjOf = code => state.carTasks.find(t => t.carId===state.carId && t.code===code);
+async function saveTask(row, done){
+  try{ await store.saveCarTask(row); state.editingTask=null; await store.reload(); toast(done); }
+  catch{ toast("No se pudo guardar. Prueba otra vez."); }
+}
+// La fila de una tarea del catálogo conservando lo que ya tuviera
+const catalogRow = (code, patch) => { const a=adjOf(code);
+  return { car_id:state.carId, code, custom:false, hidden:a?.hidden||false, interval_km:a?.km??null, interval_months:a?.months??null, ...patch }; };
+const customRow = (a, patch) => ({ car_id:state.carId, code:a.code, custom:true, name:a.name, action:a.action||null, hidden:a.hidden, interval_km:a.km, interval_months:a.months, notes:a.notes||null, ...patch });
+function setHidden(code, hidden){
+  const a=adjOf(code), msg=hidden?"Tarea oculta":"Tarea visible otra vez";
+  return saveTask(a?.custom ? customRow(a,{hidden}) : catalogRow(code,{hidden}), msg);
+}
+$("#p-proximos").addEventListener("click", async e => {
+  const b=e.target.closest("button[data-act]"); if(!b) return;
+  const code=b.dataset.code, act=b.dataset.act;
+  if(act==="log") return quickLog(code);
+  if(act==="edit"||act==="new"){ state.editingTask = act==="new" ? "__new" : code; render();
+    const f=$("#p-proximos form.edit"); f?.scrollIntoView({behavior:"smooth",block:"nearest"}); f?.querySelector("input")?.focus(); return; }
+  if(act==="cancel"){ state.editingTask=null; return render(); }
+  if(act==="hide") return setHidden(code, true);
+  if(act==="show") return setHidden(code, false);
+  if(act==="reset") return saveTask(catalogRow(code,{interval_km:null,interval_months:null}), "Plazo original recuperado");
+  if(act==="del"){
+    if(!b.dataset.armed){ b.dataset.armed="1"; b.textContent="¿Seguro? Pulsa otra vez para borrar"; b.classList.add("danger"); return; }
+    const a=adjOf(code); if(!a) return;
+    // Si ya está en el historial se oculta en vez de borrarla, para que el historial conserve su nombre
+    if(state.logs.some(l=>l.carId===state.carId && l.items.includes(code))) return saveTask(customRow(a,{hidden:true}), "Está en tu historial: la he ocultado en vez de borrarla");
+    try{ await store.deleteCarTask(a.id); state.editingTask=null; await store.reload(); toast("Tarea borrada"); }catch{ toast("No se pudo borrar."); }
+  }
+});
+$("#p-proximos").addEventListener("submit", e => {
+  const f=e.target.closest("form.edit"); if(!f) return;
+  e.preventDefault();
+  const msg=t=>{ f.querySelector(".msg").textContent=t; };
+  const num=n=>{ const x=f.elements[n]; return x && x.value!=="" ? Math.round(Number(x.value)) : null; };
+  const kmV=num("km"), monthsV=num("months");
+  if(!kmV && !monthsV) return msg("Pon cada cuántos km, cada cuántos meses o las dos cosas.");
+  const code=f.dataset.code, it=code?findItem(code):null;
+  if(!it || it.custom){
+    const name=f.elements.name.value.trim(); if(!name) return msg("Ponle un nombre.");
+    const a=it?adjOf(code):null;
+    return saveTask({ car_id:state.carId, code: code || "u_"+Array.from(crypto.getRandomValues(new Uint8Array(6)),x=>x.toString(16).padStart(2,"0")).join(""), custom:true, name,
+      action:f.elements.action.value.trim()||null, notes:f.elements.notes.value.trim()||null, hidden:a?.hidden||false,
+      interval_km:kmV, interval_months:monthsV }, it?"Tarea guardada":"Tarea añadida");
+  }
+  // Tarea del catálogo: se guarda solo lo que difiere del plazo original (0 = no contar por esa vía)
+  const ov=(v,orig)=> v===orig ? null : (v==null ? 0 : v);
+  saveTask(catalogRow(code,{ interval_km:ov(kmV,it.factory.km), interval_months:ov(monthsV,it.factory.months) }), "Plazo cambiado para este coche");
+});
 
 function resetLogForm(){
   state.editingLog=null; $("#logForm").reset(); $("#logDate").value=todayISO(); $("#logOtherWrap").hidden=true;

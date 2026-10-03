@@ -9,7 +9,7 @@ Se ve bien en el móvil. Cada persona entra con su email y contraseña y solo ve
 - `index.html`, `app.js`, `config.js`: la web, sin compilación. Usa [supabase-js](https://supabase.com/docs/reference/javascript) desde jsDelivr.
 - Datos en [Supabase](https://supabase.com) (proyecto `car-maintenance`, París):
   - **Catálogo** (igual para todos, solo lectura desde la web): `vehicle_models`, `maintenance_tasks`, `parts`, `part_refs`, `model_sources`.
-  - **Datos de cada usuario** (privados con Row Level Security): `cars`, `service_logs`.
+  - **Datos de cada usuario** (privados con Row Level Security): `cars`, `service_logs`, `car_tasks`.
 - `supabase/migrations/`: el esquema de la base de datos.
 - `supabase/seed_suzuki_alto.sql`: el Suzuki Alto 1.0 GL (2009–2014, motor K10B).
 - `supabase/seeds/`: Toyota Yaris, Citroën Xsara Picasso y Renault Kangoo, cada uno con sus notas.
@@ -42,6 +42,13 @@ end $$;
 ```
 
 En la web el modelo se elige en tres pasos, como en las tiendas de recambios: **marca** (`make`), **modelo** (`model` + `generation` + años) y **motorización** (`version`, potencia, combustible y `engine_code`). Cada motorización es una fila de `vehicle_models`.
+
+## Ajustar el plan de un coche
+
+Desde *Próximos*, el botón **Ajustar** de cada tarea permite cambiar su plazo (km y/o meses) u ocultarla, y **Añadir un mantenimiento propio** crea tareas con su propia recurrencia. Se guarda en `car_tasks`, una fila por tarea ajustada y por coche; el catálogo no cambia:
+
+- Tarea del catálogo: `interval_km` / `interval_months` a `null` usan el plazo original y `0` deja de contar por esa vía. La web enseña siempre el plazo original junto al cambiado.
+- Tarea propia: `custom = true` y `code` empieza por `u_`; sus códigos se anotan en `service_logs.task_codes` igual que los del catálogo. Si ya está en el historial, al borrarla se oculta para no perder su nombre.
 
 ## Solicitudes de modelos
 
