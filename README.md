@@ -12,6 +12,7 @@ Se ve bien en el móvil. Cada persona entra con su email y contraseña y solo ve
   - **Datos de cada usuario** (privados con Row Level Security): `cars`, `service_logs`.
 - `supabase/migrations/`: el esquema de la base de datos.
 - `supabase/seed_suzuki_alto.sql`: el Suzuki Alto 1.0 GL (2009–2014, motor K10B).
+- `supabase/seeds/`: Toyota Yaris, Citroën Xsara Picasso y Renault Kangoo, cada uno con sus notas.
 
 `config.js` lleva la URL del proyecto y la clave *publishable*. Esa clave es pública por diseño: la seguridad la ponen las reglas de Row Level Security.
 
@@ -29,6 +30,16 @@ Se insertan filas en el catálogo; la web no cambia. Usa `supabase/seed_suzuki_a
 4. Las fuentes consultadas en `model_sources`.
 
 Se puede ejecutar en el editor SQL de Supabase.
+
+Los modelos grandes están en `supabase/seeds/` (un `.sql` y un `.md` con las fuentes y lo que no se pudo confirmar). Como no caben en una consulta, se cargan desde GitHub con la extensión `http`, comprobando antes el md5 del fichero:
+
+```sql
+do $$ declare c text; begin
+  select content into c from extensions.http_get('https://raw.githubusercontent.com/rmariscal13/car-maintenance/<commit>/supabase/seeds/<modelo>.sql');
+  if md5(c) <> '<md5 del fichero>' then raise exception 'md5 distinto'; end if;
+  execute regexp_replace(c, '^(begin|commit);\s*$', '', 'gmi');
+end $$;
+```
 
 En la web el modelo se elige en tres pasos, como en las tiendas de recambios: **marca** (`make`), **modelo** (`model` + `generation` + años) y **motorización** (`version`, potencia, combustible y `engine_code`). Cada motorización es una fila de `vehicle_models`.
 
