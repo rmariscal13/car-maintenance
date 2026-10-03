@@ -13,9 +13,11 @@ const srcOf = it => ({ label: it.srcLabel || it.srcType, cls: it.srcType==="apro
 const modelName = m => [m.make, m.model, m.version].filter(Boolean).join(" ");
 // Selector en tres pasos, como en las tiendas de recambios: marca → modelo (generación y años) → motorización
 const FUEL_TEXT = { gasolina:"Gasolina", diesel:"Diésel", hibrido:"Híbrido", hibrido_enchufable:"Híbrido enchufable", electrico:"Eléctrico", glp:"GLP", gnc:"Gas natural" };
-const seriesKey = m => [m.make, m.model, m.generation, m.year_from, m.year_to].join("|");
-const seriesName = m => [m.model, m.generation].filter(Boolean).join(" ") + ` · ${m.year_from||"?"}–${m.year_to||"hoy"}`;
-const engineName = m => [m.version, m.power_kw?Math.round(m.power_kw*1.36)+" CV":null, FUEL_TEXT[m.fuel]||m.fuel, m.engine_code].filter(Boolean).join(" · ");
+const seriesKey = m => [m.make, m.model, m.generation].join("|");
+// Años de la generación: del motor más antiguo al más reciente
+const seriesName = (m, list) => { const g=list.filter(x=>seriesKey(x)===seriesKey(m)); const from=Math.min(...g.map(x=>x.year_from||9999)), to=g.some(x=>!x.year_to)?null:Math.max(...g.map(x=>x.year_to));
+  return [m.model, m.generation].filter(Boolean).join(" ") + ` · ${from<9999?from:"?"}–${to||"hoy"}`; };
+const engineName = m => [m.version, m.power_kw && !/CV/.test(m.version||"") ? Math.round(m.power_kw*1.36)+" CV" : null, FUEL_TEXT[m.fuel]||m.fuel, m.engine_code, `${m.year_from||"?"}–${m.year_to||"hoy"}`].filter(Boolean).join(" · ");
 // Piezas de una tarea; las que dependen del equipamiento (con o sin aire) se filtran según el coche
 const partsFor = (it, c) => (it.parts||[]).filter(p => !p.condition || (p.condition==="sin_aire") === (c?.ac===false));
 
@@ -53,7 +55,7 @@ async function ensureModel(id){
 }
 
 /* ===== Datos del usuario ===== */
-const fromCar = r => ({ id:r.id, modelId:r.model_id, name:r.name||"", plate:r.plate||"", firstReg:r.first_reg, kmNow:r.km_now, kmDate:r.km_date, ac:r.has_ac });
+const fromCar = r => ({ id:r.id, modelId:r.model_id, name:r.name||"", plate:r.plate||"", firstReg:r.first_reg, kmNow:r.km_now, kmDate:r.km_date, ac:r.has_ac, van:r.is_van===true });
 const fromLog = r => ({ id:r.id, carId:r.car_id, date:r.done_on, km:r.km, items:r.task_codes||[], other:r.other||"",
   cost:r.cost==null?null:Number(r.cost), where:r.place||"", notes:r.notes||"" });
 const must = ({ data, error }) => { if (error) throw error; return data; };
@@ -65,7 +67,7 @@ const store = {
     render();
   },
   async saveCar(c){
-    const row = { model_id:c.modelId, name:c.name||null, plate:c.plate||null, first_reg:c.firstReg||null, km_now:c.kmNow, km_date:c.kmDate||null, has_ac:c.ac!==false };
+    const row = { model_id:c.modelId, name:c.name||null, plate:c.plate||null, first_reg:c.firstReg||null, km_now:c.kmNow, km_date:c.kmDate||null, has_ac:c.ac!==false, is_van:c.van===true };
     if (c.id) { must(await sb.from("cars").update(row).eq("id", c.id)); return c.id; }
     return must(await sb.from("cars").insert(row).select("id").single()).id;
   },
@@ -123,9 +125,11 @@ function itvNext(c, logs){
   const reg=parse(c.firstReg);
   const last=logs.filter(l=>l.items.includes("itv")).sort((a,b)=>b.date.localeCompare(a.date))[0];
   const ageAt = d => (d-reg)/(365.25*DAY);
-  if(last){ const d=parse(last.date); return { due:addMonths(d, ageAt(d)>=10?12:24), last }; }
-  let due=addMonths(reg,48); const now=new Date();
-  while(due<now - 0){ due = addMonths(due, ageAt(due)>=10?12:24); if(due>now) break; }
+  // Turismo: a los 4 años, luego cada 2 y anual desde los 10. Furgoneta (N1): a los 2, cada 2 hasta los 6, anual hasta los 10 y luego cada 6 meses
+  const step = d => { const a=ageAt(d); return c.van ? (a>=10?6 : a>=6?12 : 24) : (a>=10?12:24); };
+  if(last){ const d=parse(last.date); return { due:addMonths(d, step(d)), last }; }
+  let due=addMonths(reg, c.van?24:48); const now=new Date();
+  while(due<now - 0){ due = addMonths(due, step(due)); if(due>now) break; }
   return { due, last:null, estimated:true };
 }
 function schedule(c){
@@ -269,7 +273,7 @@ function renderPlan(c){
   const m=c?model(c):EMPTY_MODEL;
   $("#p-plan").innerHTML=`<div class="box"><h2>${esc(m.name)}</h2><div class="muted small">${esc(m.detail)}</div>
     <div class="tablewrap" style="margin-top:8px"><table><thead><tr><th>Tarea</th><th>Kilómetros</th><th>Tiempo</th><th>Qué hacer</th><th>De dónde sale</th></tr></thead><tbody>
-    ${m.items.map(it=>`<tr><td><strong>${esc(it.name)}</strong><div class="small muted">${esc(it.why||"")}</div></td><td class="n">${it.km?km(it.km):"—"}</td><td class="n">${it.special==="itv"?"4 años, luego 2; anual desde 10":it.months?it.months+" meses":"—"}</td><td>${esc(it.action)}</td><td><span class="src ${srcOf(it).cls}">${esc(srcOf(it).label)}</span></td></tr>`).join("")}
+    ${m.items.map(it=>`<tr><td><strong>${esc(it.name)}</strong><div class="small muted">${esc(it.why||"")}</div></td><td class="n">${it.km?km(it.km):"—"}</td><td class="n">${it.special==="itv"?(c?.van?"2 años, cada 2 hasta 6, anual hasta 10, luego cada 6 meses":"4 años, luego 2; anual desde 10"):it.months?it.months+" meses":"—"}</td><td>${esc(it.action)}</td><td><span class="src ${srcOf(it).cls}">${esc(srcOf(it).label)}</span></td></tr>`).join("")}
     </tbody></table></div>
     <div class="legend small" style="margin-top:8px">${[...new Map(m.items.map(it=>[srcOf(it).label,srcOf(it)])).values()].map(x=>`<span><span class="src ${x.cls}">${esc(x.label)}</span> <span class="muted">${esc(x.text)}</span></span>`).join("")}</div>
     <p class="small muted">Lo que antes llegue: kilómetros o tiempo. Si usas el coche en ciudad con trayectos cortos, mucho calor o polvo, adelanta aceite y filtros.</p></div>
@@ -284,7 +288,7 @@ function renderCarForm(c){
   fillModelPicker(c?.modelId||state.modelList[0]?.id||"");
   $("#cName").value=c?.name||""; $("#cPlate").value=c?.plate||"";
   $("#cReg").value=c?.firstReg||""; $("#cKm").value=c?.kmNow??""; $("#cKmDate").value=c?.kmDate||todayISO();
-  $("#cAC").checked = c ? c.ac!==false : true;
+  $("#cAC").checked = c ? c.ac!==false : true; $("#cVan").checked = c?.van===true;
   $("#carFormTitle").textContent = c? "Datos del coche" : "Añadir coche";
   $("#carDelRow").hidden=!c; $("#carDelConfirm").hidden=true;
 }
@@ -292,13 +296,13 @@ function renderCarForm(c){
 function fillModelPicker(id, level){
   const list=state.modelList, cur=list.find(m=>m.id===id);
   const opts=(xs,val,txt,sel)=>xs.map(x=>`<option value="${esc(val(x))}" ${val(x)===sel?"selected":""}>${esc(txt(x))}</option>`).join("");
-  const make = level==="make" ? $("#cMake").value : cur?.make;
+  const make = level ? $("#cMake").value : cur?.make;
   const makes=[...new Set(list.map(m=>m.make))];
   $("#cMake").innerHTML=opts(makes,x=>x,x=>x,make);
   const inMake=list.filter(m=>m.make===$("#cMake").value);
   const series=[...new Map(inMake.map(m=>[seriesKey(m),m])).values()];
   const sKey = level==="series" ? $("#cSeries").value : (cur && cur.make===$("#cMake").value ? seriesKey(cur) : seriesKey(series[0]||{}));
-  $("#cSeries").innerHTML=opts(series,seriesKey,seriesName,sKey);
+  $("#cSeries").innerHTML=opts(series,seriesKey,m=>seriesName(m,inMake),sKey);
   const engines=inMake.filter(m=>seriesKey(m)===$("#cSeries").value);
   $("#cModel").innerHTML=opts(engines,m=>m.id,engineName,engines.some(m=>m.id===id)?id:engines[0]?.id);
 }
@@ -381,7 +385,7 @@ $("#kmForm").addEventListener("submit",async e=>{ e.preventDefault(); const c=ca
 $("#carForm").addEventListener("submit",async e=>{
   e.preventDefault(); const c=$("#carForm").dataset.for==="new"?null:car();
   const data={ id:c?.id||null, modelId:$("#cModel").value, name:$("#cName").value.trim(), plate:$("#cPlate").value.trim().toUpperCase(),
-    firstReg:$("#cReg").value, kmNow:Number($("#cKm").value), kmDate:$("#cKmDate").value, ac:$("#cAC").checked };
+    firstReg:$("#cReg").value, kmNow:Number($("#cKm").value), kmDate:$("#cKmDate").value, ac:$("#cAC").checked, van:$("#cVan").checked };
   try{ data.id=await store.saveCar(data); await ensureModel(data.modelId); state.addingCar=false; state.carId=data.id; try{localStorage.setItem("mant-car",data.id)}catch{}; await store.reload(); $("#carForm").dataset.for=""; toast("Coche guardado"); if(!c) go("proximos"); else render(); }
   catch{ $("#carMsg").textContent="No se pudo guardar. Prueba otra vez."; }
 });
