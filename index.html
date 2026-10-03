@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Taller</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a workshop service book. Odometer strip on top, then a single column of service cards sorted by urgency; tabs switch between upcoming, history, plan and car. */
+:root{
+  --bg:#eef1f3; --surface:#ffffff; --sunk:#e3e8ec; --line:#cfd6dc;
+  --fg:#1b2329; --muted:#5b6872; --accent:#1f5f8b; --accent-fg:#ffffff;
+  --ok:#2f7d4f; --ok-bg:#e2f2e8; --warn:#9a6200; --warn-bg:#fdf0d5; --bad:#b3261e; --bad-bg:#fbe3e1;
+  --odo-bg:#1b2329; --odo-fg:#f4f6f7;
+  --f-display:"Barlow Condensed","Arial Narrow",Arial,sans-serif;
+  --f-body:"Barlow",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+  --r:10px;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#12171b; --surface:#1a2127; --sunk:#232c33; --line:#33404a;
+  --fg:#e6ebee; --muted:#9aa8b2; --accent:#6cb3e3; --accent-fg:#0d1a23;
+  --ok:#6fcf97; --ok-bg:#18301f; --warn:#f2b84b; --warn-bg:#352a12; --bad:#ff8a80; --bad-bg:#3a1d1b;
+  --odo-bg:#0b0f12; --odo-fg:#f4f6f7; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#12171b; --surface:#1a2127; --sunk:#232c33; --line:#33404a;
+  --fg:#e6ebee; --muted:#9aa8b2; --accent:#6cb3e3; --accent-fg:#0d1a23;
+  --ok:#6fcf97; --ok-bg:#18301f; --warn:#f2b84b; --warn-bg:#352a12; --bad:#ff8a80; --bad-bg:#3a1d1b;
+  --odo-bg:#0b0f12; --odo-fg:#f4f6f7; color-scheme:dark}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{background:var(--bg);color:var(--fg);font:16px/1.5 var(--f-body);margin:0}
+.wrap{max-width:760px;margin:0 auto;padding-inline:16px;padding-block:16px 48px;display:flex;flex-direction:column;gap:16px}
+h1,h2,h3{font-family:var(--f-display);text-wrap:balance;margin:0;line-height:1.1}
+h1{font-size:1.9rem;font-weight:700;letter-spacing:.01em}
+h2{font-size:1.35rem;font-weight:600}
+h3{font-size:1.15rem;font-weight:600}
+.muted{color:var(--muted)}
+.small{font-size:.875rem}
+.mono{font-family:var(--f-mono);font-variant-numeric:tabular-nums}
+a{color:var(--accent)}
+header.top{display:flex;flex-wrap:wrap;align-items:end;justify-content:space-between;gap:8px 16px}
+.carpick{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+select,input,textarea{font:inherit;color:var(--fg);background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:8px 10px;min-width:0;max-width:100%}
+input:focus-visible,select:focus-visible,textarea:focus-visible,button:focus-visible,a:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+button{font:600 .95rem var(--f-body);border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--fg);padding:8px 14px;cursor:pointer}
+button.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-fg)}
+button.ghost{background:transparent;border-color:transparent;color:var(--accent);padding:6px 8px}
+button.danger{color:var(--bad);border-color:var(--bad)}
+button:disabled{opacity:.5;cursor:default}
+/* odometer */
+.odo{background:var(--odo-bg);color:var(--odo-fg);border-radius:var(--r);padding:16px;display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center}
+.odo .lbl{font:600 .75rem var(--f-body);letter-spacing:.12em;text-transform:uppercase;opacity:.7}
+.odo .digits{display:flex;gap:3px;margin-top:4px;flex-wrap:wrap}
+.odo .digits span{font:500 1.6rem var(--f-mono);background:#2c363e;color:#f4f6f7;border-radius:4px;padding:0 6px;min-width:1.3em;text-align:center}
+.odo .digits span.u{background:transparent;padding-left:6px;font-size:1rem;align-self:end;opacity:.7}
+.odo .meta{font-size:.85rem;opacity:.75;margin-top:6px}
+.odo button{background:#f4f6f7;color:#1b2329;border-color:#f4f6f7}
+@media (max-width:480px){.odo{grid-template-columns:1fr}.odo .digits span{font-size:1.35rem}}
+/* summary chips */
+.summary{display:flex;gap:8px;flex-wrap:wrap}
+.pill{display:inline-flex;align-items:center;gap:6px;font:600 .8rem var(--f-body);padding:3px 10px;border-radius:999px;white-space:nowrap}
+.pill.bad{background:var(--bad-bg);color:var(--bad)}
+.pill.warn{background:var(--warn-bg);color:var(--warn)}
+.pill.ok{background:var(--ok-bg);color:var(--ok)}
+.pill.none{background:var(--sunk);color:var(--muted)}
+/* tabs */
+nav.tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);overflow-x:auto}
+nav.tabs button{border:none;border-bottom:3px solid transparent;border-radius:0;background:transparent;color:var(--muted);padding:10px 12px;font:600 1.05rem var(--f-display);letter-spacing:.02em;white-space:nowrap}
+nav.tabs button[aria-selected="true"]{color:var(--fg);border-bottom-color:var(--accent)}
+/* service cards */
+.list{display:flex;flex-direction:column;gap:10px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:14px 16px;display:flex;flex-direction:column;gap:10px;min-width:0}
+.card.bad{border-left:4px solid var(--bad)}
+.card.warn{border-left:4px solid var(--warn)}
+.card.ok{border-left:4px solid var(--ok)}
+.card.none{border-left:4px solid var(--line)}
+.card .head{display:flex;justify-content:space-between;align-items:start;gap:8px;flex-wrap:wrap}
+.due{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:4px 16px}
+.due div{min-width:0}
+.due .k{font-size:.75rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600}
+.bar{height:6px;background:var(--sunk);border-radius:3px;overflow:hidden}
+.bar i{display:block;height:100%;background:var(--ok)}
+.card.warn .bar i{background:var(--warn)} .card.bad .bar i{background:var(--bad)}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+details.parts{border-top:1px dashed var(--line);padding-top:8px}
+details.parts summary{cursor:pointer;font-weight:600;color:var(--accent)}
+.part{margin-top:10px;display:flex;flex-direction:column;gap:6px}
+.refs{display:flex;flex-direction:column;gap:6px}
+.ref{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;background:var(--sunk);border-radius:8px;padding:6px 10px}
+.ref b{font-family:var(--f-mono);font-weight:500;font-size:.9rem}
+.ref a{font-size:.85rem;font-weight:600}
+.note{font-size:.875rem;color:var(--muted)}
+.src{display:inline-block;font:600 .72rem var(--f-body);letter-spacing:.04em;text-transform:uppercase;border-radius:4px;padding:1px 6px;border:1px solid var(--line);color:var(--muted);white-space:nowrap}
+.src.src-aprox{border-style:dashed;color:var(--warn);border-color:var(--warn)}
+.legend{display:flex;gap:8px 16px;flex-wrap:wrap;align-items:center}
+/* forms */
+form.box,.box{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:16px;display:flex;flex-direction:column;gap:12px}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px}
+label.f{display:flex;flex-direction:column;gap:4px;font-weight:600;font-size:.9rem;min-width:0}
+label.f span.h{font-weight:400;color:var(--muted);font-size:.8rem}
+.checks{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:6px}
+.checks label{display:flex;gap:8px;align-items:center;font-size:.95rem;background:var(--sunk);border-radius:8px;padding:6px 10px}
+/* history */
+.log{display:flex;flex-direction:column;gap:4px}
+.log .when{display:flex;gap:12px;flex-wrap:wrap;align-items:baseline}
+.tags{display:flex;gap:6px;flex-wrap:wrap}
+.tag{font-size:.8rem;background:var(--sunk);border-radius:6px;padding:2px 8px}
+/* plan table */
+.tablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:var(--r);background:var(--surface)}
+table{border-collapse:collapse;width:100%;min-width:640px;font-size:.92rem}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font:600 .75rem var(--f-body);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);background:var(--sunk)}
+td.n{font-family:var(--f-mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+.sources li{margin-bottom:4px}
+.empty{text-align:center;padding:28px 16px;color:var(--muted)}
+.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(16px + env(safe-area-inset-bottom,0px));background:var(--fg);color:var(--bg);padding:10px 16px;border-radius:8px;font-weight:600;z-index:10}
+.banner{background:var(--warn-bg);color:var(--warn);border-radius:8px;padding:8px 12px;font-size:.9rem}
+@media (prefers-reduced-motion:no-preference){.bar i{transition:width .4s ease}}
+#appBody[hidden]{display:none!important}
+:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header class="top">
+    <div>
+      <div class="muted small" style="letter-spacing:.12em;text-transform:uppercase;font-weight:600">Libro de mantenimiento</div>
+      <h1 id="carTitle">Mi coche</h1>
+      <div class="muted small" id="carSub">Elige tu modelo para ver su plan de mantenimiento</div>
+    </div>
+    <div class="row">
+    <div class="carpick" id="carPickWrap" hidden>
+      <label class="small muted" for="carSelect">Coche</label>
+      <select id="carSelect"></select>
+    </div>
+    <button type="button" class="ghost" id="signOut" hidden>Cerrar sesión</button>
+    </div>
+  </header>
+
+  <form class="box" id="authForm" hidden>
+    <h2 id="authTitle">Entra en tu cuenta</h2>
+    <p class="muted small" style="margin:0">Tus coches y tu historial se guardan en tu cuenta, así los ves igual en el móvil y en el ordenador.</p>
+    <div class="grid2">
+      <label class="f" for="authEmail">Correo<input id="authEmail" type="email" autocomplete="email" required></label>
+      <label class="f" for="authPass">Contraseña <span class="h">Mínimo 6 caracteres</span><input id="authPass" type="password" autocomplete="current-password" minlength="6" required></label>
+    </div>
+    <div class="row"><button class="primary" type="submit" id="authSubmit">Entrar</button>
+      <button type="button" class="ghost" id="authToggle">Crear una cuenta nueva</button></div>
+    <div class="small" id="authMsg" role="status"></div>
+  </form>
+
+  <div id="appBody" hidden style="display:contents">
+
+  <div id="storeBanner" class="banner" hidden></div>
+
+  <section class="odo" id="odo" hidden>
+    <div>
+      <div class="lbl">Kilómetros estimados hoy</div>
+      <div class="digits" id="odoDigits"></div>
+      <div class="meta" id="odoMeta"></div>
+    </div>
+    <button id="odoBtn" type="button">Actualizar km</button>
+  </section>
+  <form class="box" id="kmForm" hidden>
+    <h3>Actualizar kilometraje</h3>
+    <div class="grid2">
+      <label class="f" for="kmNowIn">Kilómetros del cuentakilómetros<input id="kmNowIn" type="number" inputmode="numeric" min="0" step="1" required></label>
+      <label class="f" for="kmDateIn">Fecha de la lectura<input id="kmDateIn" type="date" required></label>
+    </div>
+    <div class="row"><button class="primary" type="submit">Guardar kilómetros</button><button type="button" id="kmCancel">Cancelar</button></div>
+  </form>
+
+  <div class="summary" id="summary"></div>
+
+  <nav class="tabs" role="tablist">
+    <button role="tab" id="tab-proximos" aria-selected="true" data-tab="proximos">Próximos</button>
+    <button role="tab" id="tab-recambios" aria-selected="false" data-tab="recambios">Recambios</button>
+    <button role="tab" id="tab-historial" aria-selected="false" data-tab="historial">Historial</button>
+    <button role="tab" id="tab-plan" aria-selected="false" data-tab="plan">Plan del fabricante</button>
+    <button role="tab" id="tab-coche" aria-selected="false" data-tab="coche">Mi coche</button>
+  </nav>
+
+  <section id="p-proximos" class="list"></section>
+
+  <section id="p-recambios" hidden class="list">
+    <div class="box">
+      <h2>Recambios y bombillas</h2>
+      <p class="muted small" style="margin:0">Piezas que se cambian cuando se rompen o se funden, no por kilómetros. Busca la pieza y abre el enlace de compra.</p>
+      <label class="f" for="spareSearch">Buscar pieza<input id="spareSearch" type="search" placeholder="Por ejemplo: freno, matrícula, batería"></label>
+      <div class="legend small"><span><span class="src src-ok">Confirmado</span> <span class="muted">Un solo tipo para este coche</span></span><span><span class="src src-aprox">Comprobar</span> <span class="muted">Varía según la unidad: mira la pieza vieja antes de comprar</span></span></div>
+    </div>
+    <div id="spareList" class="list"></div>
+  </section>
+
+  <section id="p-historial" hidden>
+    <div class="list">
+      <form class="box" id="logForm">
+        <h2 id="logFormTitle">Registrar mantenimiento</h2>
+        <div class="grid2">
+          <label class="f" for="logDate">Fecha<input id="logDate" type="date" required></label>
+          <label class="f" for="logKm">Kilómetros<input id="logKm" type="number" inputmode="numeric" min="0" step="1" required></label>
+        </div>
+        <fieldset style="border:none;padding:0;margin:0;display:flex;flex-direction:column;gap:6px">
+          <legend style="font-weight:600;font-size:.9rem;margin-bottom:6px">¿Qué se hizo? Marca todo lo que entró en esta visita</legend>
+          <div class="checks" id="logItems"></div>
+          <label class="f" for="logOther" id="logOtherWrap" hidden>¿Qué otro trabajo? <span class="h">Por ejemplo: cambio de amortiguadores, bombilla, reparación…</span><input id="logOther" type="text" maxlength="120"></label>
+        </fieldset>
+        <div class="grid2">
+          <label class="f" for="logCost">Coste (€) <span class="h">Opcional</span><input id="logCost" type="number" inputmode="decimal" min="0" step="0.01"></label>
+          <label class="f" for="logWhere">Taller o tienda <span class="h">Opcional</span><input id="logWhere" type="text" maxlength="80"></label>
+        </div>
+        <label class="f" for="logNotes">Notas <span class="h">Marca y referencia del recambio, observaciones…</span><textarea id="logNotes" rows="2" maxlength="500"></textarea></label>
+        <div class="row"><button class="primary" type="submit" id="logSubmit">Guardar en el historial</button><span class="small muted" id="logMsg"></span></div>
+      </form>
+      <div id="logList" class="list"></div>
+    </div>
+  </section>
+
+  <section id="p-plan" hidden class="list"></section>
+
+  <section id="p-coche" hidden class="list">
+    <form class="box" id="carForm">
+      <h2 id="carFormTitle">Datos del coche</h2>
+      <div class="grid2">
+        <label class="f" for="cModel">Modelo <span class="h">Si el tuyo no está, pídelo y se añade al catálogo</span><select id="cModel" required></select></label>
+        <label class="f" for="cName">Nombre <span class="h">Para distinguirlo si añades más</span><input id="cName" type="text" maxlength="40" placeholder="El Alto"></label>
+        <label class="f" for="cPlate">Matrícula <span class="h">Opcional</span><input id="cPlate" type="text" maxlength="12"></label>
+        <label class="f" for="cReg">Fecha de primera matriculación <span class="h">Para calcular la ITV y los plazos por tiempo</span><input id="cReg" type="date" required></label>
+        <label class="f" for="cKm">Kilómetros actuales<input id="cKm" type="number" inputmode="numeric" min="0" step="1" required></label>
+        <label class="f" for="cKmDate">Fecha de esa lectura<input id="cKmDate" type="date" required></label>
+      </div>
+      <label class="row small" for="cAC" style="gap:8px"><input id="cAC" type="checkbox" checked> Tiene aire acondicionado (cambia la correa de accesorios)</label>
+      <div class="row">
+        <button class="primary" type="submit" id="carSubmit">Guardar coche</button>
+        <button type="button" id="carNew">Añadir otro coche</button>
+        <span class="small muted" id="carMsg"></span>
+      </div>
+      <div class="row" id="carDelRow" hidden>
+        <button type="button" class="danger" id="carDel">Borrar este coche</button>
+        <span id="carDelConfirm" hidden class="row small"><span>Se borrará el coche y todo su historial.</span><button type="button" class="danger" id="carDelYes">Sí, borrar</button><button type="button" id="carDelNo">Cancelar</button></span>
+      </div>
+    </form>
+    <div class="box small" id="modelInfo"></div>
+  </section>
+</div>
+</div>
+<div class="toast" id="toast" hidden></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.2/dist/umd/supabase.min.js"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
