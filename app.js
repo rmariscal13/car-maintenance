@@ -142,17 +142,12 @@ function schedule(c){
     let pk=0, pd=0, daysByKm=Infinity, daysByTime=Infinity;
     if(it.km){ r.dueKm=base.k+it.km; r.kmLeft=r.dueKm-kmToday; pk=(kmToday-base.k)/it.km; daysByKm=r.kmLeft/rate; }
     if(it.months){ r.dueDate=addMonths(base.d,it.months); daysByTime=(r.dueDate-today)/DAY; pd=(today-base.d)/(r.dueDate-base.d); }
-    // Si nunca se registró y la tarea es por km, el plazo por tiempo desde la matriculación no aplica más allá de una vuelta
-    if(r.fromReg && it.km && it.months){
-      // avanzar al siguiente múltiplo, como si se hubiera hecho a su tiempo
-      const n=Math.max(0,Math.floor(kmToday/it.km)); r.dueKm=(n+1)*it.km; r.kmLeft=r.dueKm-kmToday; daysByKm=r.kmLeft/rate; pk=(kmToday-n*it.km)/it.km;
-      r.dueDate=null; daysByTime=Infinity; pd=0; r.unknown=true;
-    } else if(r.fromReg && !it.km && it.months){
-      r.unknown=true; let d=r.dueDate, prev=base.d; while(d<today){ prev=d; d=addMonths(d,it.months); }
-      r.dueDate=d; daysByTime=(d-today)/DAY; pd=(today-prev)/(d-prev);
-    } else if(r.fromReg && it.km && !it.months){
-      r.unknown=true; const n=Math.max(0,Math.floor(kmToday/it.km)); r.dueKm=(n+1)*it.km; r.kmLeft=r.dueKm-kmToday; daysByKm=r.kmLeft/rate; pk=(kmToday-n*it.km)/it.km;
+    // Sin registro y con el primer plazo ya pasado desde la matriculación: no sabemos cuándo se hizo,
+    // así que queda pendiente en vez de suponer que se hizo a su tiempo
+    if(r.fromReg && ((it.km && kmToday>=it.km) || (it.months && today>=r.dueDate))){
+      r.status="pending"; r.unknown=true; r.pct=1; r.sort=-0.001; return r;
     }
+    if(r.fromReg) r.unknown=true;
     r.projDate = isFinite(daysByKm)? new Date(today.getTime()+daysByKm*DAY) : null;
     const days=Math.min(daysByKm,daysByTime); r.daysLeft=days;
     r.pct=Math.min(1,Math.max(0,Math.max(pk,pd)));
@@ -175,7 +170,7 @@ function partLinks(p, c){
       <a href="https://www.google.es/search?tbm=shop&q=${q(b+" "+r)}" target="_blank" rel="noopener">Comparar precios ↗</a></div>`).join("")}</div>`:""}
     ${p.note?`<div class="note">${esc(p.note)}</div>`:""}</div>`;
 }
-const statusPill = r => ({bad:'<span class="pill bad">Vencido</span>',warn:'<span class="pill warn">Pronto</span>',ok:'<span class="pill ok">Al día</span>',none:'<span class="pill none">Sin datos</span>'})[r.status];
+const statusPill = r => ({bad:'<span class="pill bad">Vencido</span>',warn:'<span class="pill warn">Pronto</span>',ok:'<span class="pill ok">Al día</span>',none:'<span class="pill none">Sin datos</span>',pending:'<span class="pill bad">Sin registrar</span>'})[r.status];
 function dueText(r){
   const parts=[];
   if(r.it.special==="itv"){
@@ -183,6 +178,7 @@ function dueText(r){
     parts.push(`<div><div class="k">Última</div><div>${r.last?esc(df.format(parse(r.last.date))):'<span class="muted">Sin registrar</span>'}</div></div>`);
     return parts.join("");
   }
+  if(r.status==="pending") return `<div><div class="k">Toca</div><div>Ya debería estar hecha</div><div class="small muted">Nunca se ha registrado y ya ha pasado su plazo (${esc(intervalText(r.it))})</div></div>`;
   if(r.dueKm!=null) parts.push(`<div><div class="k">Toca a los</div><div class="mono">${km(r.dueKm)}</div><div class="small muted">${r.kmLeft<=0?`pasado por ${km(-r.kmLeft)}`:`faltan ${km(r.kmLeft)}`}${r.projDate?` · hacia ${esc(mf.format(r.projDate))}`:""}</div></div>`);
   if(r.dueDate) parts.push(`<div><div class="k">O antes del</div><div>${esc(df.format(r.dueDate))}</div></div>`);
   parts.push(`<div><div class="k">Última vez</div><div>${r.last?`${esc(df.format(parse(r.last.date)))} · <span class="mono">${km(r.last.km)}</span>`:'<span class="muted">Sin registrar</span>'}</div></div>`);
@@ -215,12 +211,12 @@ function render(){
   $("#odoDigits").innerHTML=[...digits].map(d=>`<span>${d}</span>`).join("")+'<span class="u">km</span>';
   $("#odoMeta").textContent=`Última lectura: ${km(s.rd.k)} el ${df.format(s.rd.d)} · media ${nf.format(Math.round(s.rate*365))} km/año`;
   const cnt=k=>s.rows.filter(r=>r.status===k).length;
-  $("#summary").innerHTML=[cnt("bad")?`<span class="pill bad">${cnt("bad")} vencido${cnt("bad")>1?"s":""}</span>`:"",cnt("warn")?`<span class="pill warn">${cnt("warn")} pronto</span>`:"",`<span class="pill ok">${cnt("ok")} al día</span>`].join("");
+  $("#summary").innerHTML=[cnt("bad")?`<span class="pill bad">${cnt("bad")} vencido${cnt("bad")>1?"s":""}</span>`:"",cnt("pending")?`<span class="pill bad">${cnt("pending")} sin registrar</span>`:"",cnt("warn")?`<span class="pill warn">${cnt("warn")} pronto</span>`:"",`<span class="pill ok">${cnt("ok")} al día</span>`].join("");
   // próximos
   $("#p-proximos").innerHTML = s.rows.map(r=>`<article class="card ${r.status}">
     <div class="head"><div><h3>${esc(r.it.name)}</h3><div class="small muted">${esc(r.it.action)} · ${esc(intervalText(r.it))}</div><div style="margin-top:4px"><span class="src ${srcOf(r.it).cls}" title="${esc(srcOf(r.it).text)}">${esc(srcOf(r.it).label)}</span></div></div>${statusPill(r)}</div>
     ${r.status!=="none"?`<div class="due">${dueText(r)}</div><div class="bar" aria-hidden="true"><i style="width:${Math.round((r.pct||0)*100)}%"></i></div>`:""}
-    ${r.unknown?`<div class="note">No hay registro de esta tarea; se calcula como si se hubiera hecho a su tiempo. Anótala cuando la hagas o si sabes cuándo se hizo.</div>`:""}
+    ${r.status==="pending"?`<div class="note">No hay registro de esta tarea y ya ha pasado su plazo desde la matriculación. Hazla, o apúntala en el Historial si sabes cuándo se hizo.</div>`:r.unknown?`<div class="note">No hay registro de esta tarea; se cuenta desde la matriculación.</div>`:""}
     <div class="note">${esc(r.it.why||"")}</div>
     <div class="row"><button type="button" class="ghost" onclick="quickLog('${r.it.id}')">+ Anotar como hecho</button></div>
     ${partsFor(r.it,c).length?`<details class="parts"><summary>Recambios para este coche</summary>${partsFor(r.it,c).map(p=>partLinks(p,c)).join("")}</details>`:""}

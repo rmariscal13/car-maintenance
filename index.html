@@ -72,7 +72,7 @@ nav.tabs button[aria-selected="true"]{color:var(--fg);border-bottom-color:var(--
 /* service cards */
 .list{display:flex;flex-direction:column;gap:10px}
 .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:14px 16px;display:flex;flex-direction:column;gap:10px;min-width:0}
-.card.bad{border-left:4px solid var(--bad)}
+.card.bad,.card.pending{border-left:4px solid var(--bad)}
 .card.warn{border-left:4px solid var(--warn)}
 .card.ok{border-left:4px solid var(--ok)}
 .card.none{border-left:4px solid var(--line)}
@@ -82,7 +82,7 @@ nav.tabs button[aria-selected="true"]{color:var(--fg);border-bottom-color:var(--
 .due .k{font-size:.75rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600}
 .bar{height:6px;background:var(--sunk);border-radius:3px;overflow:hidden}
 .bar i{display:block;height:100%;background:var(--ok)}
-.card.warn .bar i{background:var(--warn)} .card.bad .bar i{background:var(--bad)}
+.card.warn .bar i{background:var(--warn)} .card.bad .bar i,.card.pending .bar i{background:var(--bad)}
 .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 details.parts{border-top:1px dashed var(--line);padding-top:8px}
 details.parts summary{cursor:pointer;font-weight:600;color:var(--accent)}
