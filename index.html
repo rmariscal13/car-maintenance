@@ -225,7 +225,10 @@ td.n{font-family:var(--f-mono);font-variant-numeric:tabular-nums;white-space:now
     <form class="box" id="carForm">
       <h2 id="carFormTitle">Datos del coche</h2>
       <div class="grid2">
-        <label class="f" for="cModel">Modelo <span class="h">Si el tuyo no está, pídelo y se añade al catálogo</span><select id="cModel" required></select></label>
+        <label class="f" for="cMake">Marca<select id="cMake" required></select></label>
+        <label class="f" for="cSeries">Modelo <span class="h">Generación y años de fabricación</span><select id="cSeries" required></select></label>
+        <label class="f" for="cModel">Motorización <span class="h">Cilindrada, potencia y código de motor</span><select id="cModel" required></select></label>
+        <div class="small muted" style="align-self:end">¿No está tu coche? <button type="button" class="ghost" style="padding:0" onclick="openReq()">Pide que se añada</button></div>
         <label class="f" for="cName">Nombre <span class="h">Para distinguirlo si añades más</span><input id="cName" type="text" maxlength="40" placeholder="El Alto"></label>
         <label class="f" for="cPlate">Matrícula <span class="h">Opcional</span><input id="cPlate" type="text" maxlength="12"></label>
         <label class="f" for="cReg">Fecha de primera matriculación <span class="h">Para calcular la ITV y los plazos por tiempo</span><input id="cReg" type="date" required></label>
@@ -244,6 +247,24 @@ td.n{font-family:var(--f-mono);font-variant-numeric:tabular-nums;white-space:now
       </div>
     </form>
     <div class="box small" id="modelInfo"></div>
+    <form class="box" id="reqForm" hidden>
+      <h2>Pedir un modelo</h2>
+      <p class="muted small" style="margin:0">Cada modelo se añade con el plan de mantenimiento de su fabricante y las piezas exactas, así que tarda un poco. Aquí verás cuándo está listo.</p>
+      <div class="grid2">
+        <label class="f" for="rMake">Marca<input id="rMake" type="text" maxlength="40" required placeholder="Seat"></label>
+        <label class="f" for="rModel">Modelo<input id="rModel" type="text" maxlength="60" required placeholder="Ibiza"></label>
+        <label class="f" for="rYear">Año de matriculación<input id="rYear" type="number" inputmode="numeric" min="1950" max="2100" step="1" required></label>
+        <label class="f" for="rFuel">Combustible<select id="rFuel">
+          <option value="">No lo sé</option><option value="gasolina">Gasolina</option><option value="diesel">Diésel</option>
+          <option value="hibrido">Híbrido</option><option value="hibrido_enchufable">Híbrido enchufable</option><option value="electrico">Eléctrico</option>
+          <option value="glp">GLP</option><option value="gnc">Gas natural (GNC)</option></select></label>
+      </div>
+      <label class="f" for="rEngine">Motor o versión <span class="h">Por ejemplo «1.0 TSI 95 CV». En la ficha técnica viene en los apartados D.2 y P.5</span><input id="rEngine" type="text" maxlength="80"></label>
+      <label class="f" for="rNotes">Algo más <span class="h">Opcional</span><textarea id="rNotes" rows="2" maxlength="500"></textarea></label>
+      <div class="row"><button class="primary" type="submit" id="reqSubmit">Enviar solicitud</button><button type="button" id="reqCancel">Cancelar</button><span class="small muted" id="reqMsg" role="status"></span></div>
+    </form>
+    <div class="box" id="reqMine" hidden></div>
+    <div class="box" id="reqAdmin" hidden></div>
   </section>
 </div>
 </div>
