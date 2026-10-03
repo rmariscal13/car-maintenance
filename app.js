@@ -11,15 +11,20 @@ const SRC_TEXT = {
 };
 const srcOf = it => ({ label: it.srcLabel || it.srcType, cls: it.srcType==="aproximado" ? "src-aprox" : "src-ok", text: SRC_TEXT[it.srcType] || "" });
 const modelName = m => [m.make, m.model, m.version].filter(Boolean).join(" ");
+// Selector en tres pasos, como en las tiendas de recambios: marca → modelo (generación y años) → motorización
+const FUEL_TEXT = { gasolina:"Gasolina", diesel:"Diésel", hibrido:"Híbrido", hibrido_enchufable:"Híbrido enchufable", electrico:"Eléctrico", glp:"GLP", gnc:"Gas natural" };
+const seriesKey = m => [m.make, m.model, m.generation, m.year_from, m.year_to].join("|");
+const seriesName = m => [m.model, m.generation].filter(Boolean).join(" ") + ` · ${m.year_from||"?"}–${m.year_to||"hoy"}`;
+const engineName = m => [m.version, m.power_kw?Math.round(m.power_kw*1.36)+" CV":null, FUEL_TEXT[m.fuel]||m.fuel, m.engine_code].filter(Boolean).join(" · ");
 // Piezas de una tarea; las que dependen del equipamiento (con o sin aire) se filtran según el coche
 const partsFor = (it, c) => (it.parts||[]).filter(p => !p.condition || (p.condition==="sin_aire") === (c?.ac===false));
 
-const state = { cars:[], logs:[], carId:null, tab:"proximos", editingLog:null, models:{}, modelList:[], user:null };
+const state = { cars:[], logs:[], carId:null, tab:"proximos", editingLog:null, models:{}, modelList:[], user:null, requests:[], isAdmin:false };
 
 /* ===== Catálogo ===== */
 async function loadModelList(){
   const { data, error } = await sb.from("vehicle_models")
-    .select("id,make,model,generation,version,year_from,year_to,engine_code,engine_desc").order("make").order("model").order("year_from");
+    .select("id,make,model,generation,version,year_from,year_to,engine_code,engine_desc,fuel,power_kw").order("make").order("model").order("year_from");
   if (error) throw error;
   state.modelList = data;
 }
@@ -70,7 +75,14 @@ const store = {
     if (l.id) must(await sb.from("service_logs").update(row).eq("id", l.id));
     else must(await sb.from("service_logs").insert(row));
   },
-  async deleteLog(id){ must(await sb.from("service_logs").delete().eq("id", id)); }
+  async deleteLog(id){ must(await sb.from("service_logs").delete().eq("id", id)); },
+  async loadRequests(){
+    const [reqs, admin] = await Promise.all([ sb.from("model_requests").select("*").order("created_at", { ascending:false }), sb.rpc("is_admin") ]);
+    state.requests = must(reqs); state.isAdmin = must(admin) === true;
+  },
+  async addRequest(r){ must(await sb.from("model_requests").insert(r)); },
+  async setRequestStatus(id, status){ must(await sb.from("model_requests").update({ status }).eq("id", id)); },
+  async deleteRequest(id){ must(await sb.from("model_requests").delete().eq("id", id)); }
 };
 
 /* ===== Utilidades ===== */
@@ -196,10 +208,10 @@ function render(){
   // pestañas
   document.querySelectorAll("nav.tabs button").forEach(b=>b.setAttribute("aria-selected", String(b.dataset.tab===state.tab)));
   ["proximos","recambios","historial","plan","coche"].forEach(t=>$("#p-"+t).hidden = t!==state.tab);
-  renderSpare(c); renderPlan(c); renderCarForm(state.addingCar?null:c); renderModelInfo(c);
+  renderSpare(c); renderPlan(c); renderCarForm(state.addingCar?null:c); renderModelInfo(c); renderRequests();
   if(!c){
     $("#odo").hidden=true; $("#summary").innerHTML="";
-    $("#p-proximos").innerHTML=`<div class="box empty"><h2 style="color:var(--fg)">Empieza por tu coche</h2><p>Indica la fecha de matriculación y los kilómetros actuales. Con eso la app calcula qué toca y cuándo. Después ve anotando lo que le hagas.</p><div><button class="primary" type="button" onclick="go('coche')">Añadir mi coche</button></div></div>`;
+    $("#p-proximos").innerHTML=`<div class="box empty"><h2 style="color:var(--fg)">Empieza por tu coche</h2><p>Indica la fecha de matriculación y los kilómetros actuales. Con eso la app calcula qué toca y cuándo. Después ve anotando lo que le hagas.</p><div><button class="primary" type="button" onclick="go('coche')">Añadir mi coche</button></div><p class="small">¿Tu coche no está en la lista? <button type="button" class="ghost" style="padding:0" onclick="openReq()">Pide que se añada</button></p></div>`;
     $("#logList").innerHTML=""; $("#logForm").hidden=true;
     return;
   }
@@ -269,17 +281,57 @@ function renderCarForm(c){
   const f=$("#carForm");
   if(f.dataset.for===String(c?.id||"new")) return;
   f.dataset.for=String(c?.id||"new");
-  $("#cModel").innerHTML=state.modelList.map(m=>`<option value="${esc(m.id)}">${esc(modelName(m))} · ${esc(m.year_from)}–${esc(m.year_to)}${m.engine_code?" · "+esc(m.engine_code):""}</option>`).join("");
-  $("#cModel").value=c?.modelId||state.modelList[0]?.id||"";
+  fillModelPicker(c?.modelId||state.modelList[0]?.id||"");
   $("#cName").value=c?.name||""; $("#cPlate").value=c?.plate||"";
   $("#cReg").value=c?.firstReg||""; $("#cKm").value=c?.kmNow??""; $("#cKmDate").value=c?.kmDate||todayISO();
   $("#cAC").checked = c ? c.ac!==false : true;
   $("#carFormTitle").textContent = c? "Datos del coche" : "Añadir coche";
   $("#carDelRow").hidden=!c; $("#carDelConfirm").hidden=true;
 }
+// Rellena marca, modelo y motorización dejando elegido el modelo del catálogo `id`
+function fillModelPicker(id, level){
+  const list=state.modelList, cur=list.find(m=>m.id===id);
+  const opts=(xs,val,txt,sel)=>xs.map(x=>`<option value="${esc(val(x))}" ${val(x)===sel?"selected":""}>${esc(txt(x))}</option>`).join("");
+  const make = level==="make" ? $("#cMake").value : cur?.make;
+  const makes=[...new Set(list.map(m=>m.make))];
+  $("#cMake").innerHTML=opts(makes,x=>x,x=>x,make);
+  const inMake=list.filter(m=>m.make===$("#cMake").value);
+  const series=[...new Map(inMake.map(m=>[seriesKey(m),m])).values()];
+  const sKey = level==="series" ? $("#cSeries").value : (cur && cur.make===$("#cMake").value ? seriesKey(cur) : seriesKey(series[0]||{}));
+  $("#cSeries").innerHTML=opts(series,seriesKey,seriesName,sKey);
+  const engines=inMake.filter(m=>seriesKey(m)===$("#cSeries").value);
+  $("#cModel").innerHTML=opts(engines,m=>m.id,engineName,engines.some(m=>m.id===id)?id:engines[0]?.id);
+}
 function renderModelInfo(c){
-  const m=c?model(c):EMPTY_MODEL;
-  $("#modelInfo").innerHTML=`<strong>Modelos disponibles: ${state.modelList.length}.</strong> <span class="muted">Cada modelo del catálogo trae su plan de mantenimiento, sus piezas y de dónde sale cada dato. Si tu coche no está, pide que se añada.</span>`;
+  $("#modelInfo").innerHTML=`<strong>Modelos disponibles: ${state.modelList.length}.</strong> <span class="muted">Cada modelo del catálogo trae su plan de mantenimiento, sus piezas y de dónde sale cada dato.</span> <button type="button" class="ghost" style="padding:0" onclick="openReq()">¿No está tu coche? Pide que se añada</button>`;
+}
+const REQ_STATUS = { pendiente:'<span class="pill warn">Pendiente</span>', hecho:'<span class="pill ok">Añadido</span>', descartado:'<span class="pill none">Descartado</span>' };
+const reqName = r => [r.make, r.model, r.year, r.engine, FUEL_TEXT[r.fuel]].filter(Boolean).join(" · ");
+function renderRequests(){
+  const uid=state.user?.id;
+  const mine=state.requests.filter(r=>r.user_id===uid);
+  $("#reqMine").hidden=!mine.length;
+  $("#reqMine").innerHTML=`<h3>Tus solicitudes</h3>${mine.map(r=>`<div class="row" style="justify-content:space-between">
+      <span>${esc(reqName(r))}</span>
+      <span class="row">${REQ_STATUS[r.status]||""}${r.status==="pendiente"?`<button type="button" class="ghost" onclick="dropReq('${r.id}')">Retirar</button>`:""}</span></div>
+      ${r.status==="hecho"?`<div class="note">Ya está en el catálogo: elígelo arriba en el formulario del coche.</div>`:""}
+      ${r.admin_note?`<div class="note">${esc(r.admin_note)}</div>`:""}`).join("")}`;
+  $("#reqAdmin").hidden=!state.isAdmin;
+  if(!state.isAdmin) return;
+  // Cuántas personas piden lo mismo, para priorizar
+  const key=r=>(r.make+" "+r.model).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/\s+/g," ").trim();
+  const count={}; state.requests.filter(r=>r.status==="pendiente").forEach(r=>count[key(r)]=(count[key(r)]||0)+1);
+  const order={pendiente:0,hecho:1,descartado:2};
+  const all=[...state.requests].sort((a,b)=>order[a.status]-order[b.status]||b.created_at.localeCompare(a.created_at));
+  $("#reqAdmin").innerHTML=`<h2>Solicitudes de modelos</h2><p class="muted small" style="margin:0">Solo tú ves esta lista. Pide a Claude que añada los pendientes y márcalos como añadidos cuando estén.</p>
+    ${all.length?all.map(r=>`<article class="card ${r.status==="pendiente"?"warn":r.status==="hecho"?"ok":"none"}">
+      <div class="head"><div><h3>${esc(r.make)} ${esc(r.model)}</h3><div class="small muted">${esc([r.year, r.engine, FUEL_TEXT[r.fuel]].filter(Boolean).join(" · "))} · pedido el ${esc(df.format(new Date(r.created_at)))}</div></div>${REQ_STATUS[r.status]||""}</div>
+      ${r.status==="pendiente"&&count[key(r)]>1?`<div class="small"><strong>${count[key(r)]} personas</strong> han pedido este modelo</div>`:""}
+      ${r.notes?`<div class="note">${esc(r.notes)}</div>`:""}
+      <div class="row">${r.status!=="hecho"?`<button type="button" class="ghost" onclick="setReq('${r.id}','hecho')">Marcar como añadido</button>`:""}
+        ${r.status!=="descartado"?`<button type="button" class="ghost" onclick="setReq('${r.id}','descartado')">Descartar</button>`:""}
+        ${r.status!=="pendiente"?`<button type="button" class="ghost" onclick="setReq('${r.id}','pendiente')">Volver a pendiente</button>`:""}</div>
+    </article>`).join(""):`<div class="empty">Todavía no hay solicitudes.</div>`}`;
 }
 
 /* ===== Acciones ===== */
@@ -333,6 +385,24 @@ $("#carForm").addEventListener("submit",async e=>{
   try{ data.id=await store.saveCar(data); await ensureModel(data.modelId); state.addingCar=false; state.carId=data.id; try{localStorage.setItem("mant-car",data.id)}catch{}; await store.reload(); $("#carForm").dataset.for=""; toast("Coche guardado"); if(!c) go("proximos"); else render(); }
   catch{ $("#carMsg").textContent="No se pudo guardar. Prueba otra vez."; }
 });
+$("#cMake").addEventListener("change",()=>fillModelPicker(null,"make"));
+$("#cSeries").addEventListener("change",()=>fillModelPicker(null,"series"));
+
+window.openReq=()=>{ go("coche"); $("#reqForm").hidden=false; $("#reqMsg").textContent=""; $("#reqForm").scrollIntoView({behavior:"smooth"}); $("#rMake").focus(); };
+$("#reqCancel").addEventListener("click",()=>{ $("#reqForm").reset(); $("#reqForm").hidden=true; });
+async function reloadRequests(){ await store.loadRequests(); renderRequests(); }
+$("#reqForm").addEventListener("submit",async e=>{
+  e.preventDefault();
+  const r={ make:$("#rMake").value.trim(), model:$("#rModel").value.trim(), year:Number($("#rYear").value),
+    engine:$("#rEngine").value.trim()||null, fuel:$("#rFuel").value||null, notes:$("#rNotes").value.trim()||null };
+  if(!r.make||!r.model){ $("#reqMsg").textContent="Pon la marca y el modelo."; return; }
+  $("#reqSubmit").disabled=true;
+  try{ await store.addRequest(r); $("#reqForm").reset(); $("#reqForm").hidden=true; await reloadRequests(); toast("Solicitud enviada"); }
+  catch(err){ $("#reqMsg").textContent = /row-level security/i.test(String(err.message)) ? "Ya tienes 10 solicitudes pendientes. Espera a que se resuelvan." : "No se pudo enviar. Prueba otra vez."; }
+  finally{ $("#reqSubmit").disabled=false; }
+});
+window.dropReq=async id=>{ try{ await store.deleteRequest(id); await reloadRequests(); toast("Solicitud retirada"); }catch{ toast("No se pudo retirar."); } };
+window.setReq=async (id,status)=>{ try{ await store.setRequestStatus(id,status); await reloadRequests(); }catch{ toast("No se pudo cambiar."); } };
 $("#carNew").addEventListener("click",()=>{ state.addingCar=true; $("#carForm").dataset.for=""; renderCarForm(null); $("#carMsg").textContent="Rellena los datos del nuevo coche."; $("#cName").focus(); });
 $("#carDel").addEventListener("click",()=>$("#carDelConfirm").hidden=false);
 $("#carDelNo").addEventListener("click",()=>$("#carDelConfirm").hidden=true);
@@ -378,10 +448,11 @@ $("#signOut").addEventListener("click", () => sb.auth.signOut());
 
 async function startSession(session){
   state.user = session?.user || null;
-  if (!state.user) { state.cars = []; state.logs = []; showAuth(true); return; }
+  if (!state.user) { state.cars = []; state.logs = []; state.requests = []; state.isAdmin = false; showAuth(true); return; }
   showAuth(false);
   try { await store.reload(); }
   catch (err) { $("#storeBanner").textContent = "No se pudieron cargar tus datos. Revisa la conexión y recarga la página."; $("#storeBanner").hidden = false; }
+  try { await reloadRequests(); } catch {}
 }
 
 /* ===== Arranque ===== */

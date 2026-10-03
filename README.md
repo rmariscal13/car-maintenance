@@ -30,6 +30,16 @@ Se insertan filas en el catálogo; la web no cambia. Usa `supabase/seed_suzuki_a
 
 Se puede ejecutar en el editor SQL de Supabase.
 
+En la web el modelo se elige en tres pasos, como en las tiendas de recambios: **marca** (`make`), **modelo** (`model` + `generation` + años) y **motorización** (`version`, potencia, combustible y `engine_code`). Cada motorización es una fila de `vehicle_models`.
+
+## Solicitudes de modelos
+
+Si alguien no encuentra su coche, lo pide desde la pestaña *Mi coche*. Las solicitudes se guardan en `model_requests`: cada persona ve las suyas y los administradores (`app_admins`) ven todas y las marcan como añadidas o descartadas. Para hacer administrador a alguien, en el editor SQL de Supabase:
+
+```sql
+insert into app_admins (user_id) select id from auth.users where email = 'tu@correo.com';
+```
+
 ## Publicación
 
 Cada cambio en `main` se publica solo en GitHub Pages (`.github/workflows/pages.yml`).
