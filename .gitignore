@@ -2,3 +2,9 @@
 node_modules/
 _site/
 .env
+
+# Despliegue en el NAS: claves, datos y copias (datos personales)
+nas/.env
+nas/data/
+nas/web/
+nas/backup/

@@ -58,7 +58,11 @@ Si alguien no encuentra su coche, lo pide desde la pestaña *Mi coche*. Las soli
 insert into app_admins (user_id) select id from auth.users where email = 'tu@correo.com';
 ```
 
-## Publicación
+## En el NAS (sin Supabase)
+
+`nas/` levanta la web y la base de datos en un servidor propio con Docker: Postgres más el login y la API de Supabase, sin tocar la web. Instrucciones en [`nas/README.md`](nas/README.md).
+
+## Publicación en GitHub Pages
 
 Cada cambio en `main` se publica solo en GitHub Pages (`.github/workflows/pages.yml`).
 

@@ -1,0 +1,21 @@
+{
+	admin off
+}
+
+:80 {
+	encode gzip
+
+	# Las mismas rutas que en supabase.co, así supabase-js no nota la diferencia
+	handle_path /auth/v1/* {
+		reverse_proxy auth:9999
+	}
+	handle_path /rest/v1/* {
+		reverse_proxy rest:3000
+	}
+
+	handle {
+		root * /srv
+		header /config.js Cache-Control "no-cache"
+		file_server
+	}
+}
